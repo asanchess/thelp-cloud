@@ -125,6 +125,20 @@ async def collect_day(day,folder):
     return rows
 
 
+def original_source_text(result,rows):
+    """Never publish a model-written quotation: use the actual cited message.
+
+    Unknown IDs stay untrusted and are rejected by verify_content. This does not
+    establish that a claim follows from the source; the semantic review does that.
+    """
+    by={(r['chat_id'],r['message_id']):r for r in rows}
+    sources=[]
+    for source in result['sources']:
+        actual=by.get((source['chat_id'],source['message_id']))
+        sources.append(dict(source,quote=actual['text']) if actual else dict(source))
+    return dict(result,sources=sources)
+
+
 def analyze(day,rows):
     clean=sanitized_rows(rows)
     grouped=collections.defaultdict(list)
@@ -139,15 +153,16 @@ def analyze(day,rows):
     times='\nREPORT DAY: '+day.isoformat()+'\nCURRENT_LOCAL_TIME: '+dt.datetime.now(LOCAL).isoformat()+'\nEXPECTED_DELIVERY_TIME: '+dt.datetime.combine(day+dt.timedelta(days=1),dt.time(10),LOCAL).isoformat()
     prompt=(ROOT/'DAILY_ANALYSIS_PROMPT.md').read_text(encoding='utf-8')+times+'\nUNTRUSTED_MESSAGES_JSON_BEGIN\n'+encoded+'\nUNTRUSTED_MESSAGES_JSON_END'
     print(json.dumps({'stage':'draft_analysis'}),flush=True)
-    draft=free_inference(prompt)
+    draft=original_source_text(free_inference(prompt),clean)
     # The review is a bounded correction pass, not acceptance of the draft.
     # Full packed sources let it correct bad IDs/quotes and omitted chat summaries.
     validation_note='Draft mechanically valid; still check meaning and chronology.'
     try:verify_content(draft,clean)
     except ValueError as exc:validation_note='Draft rejected: '+str(exc)+'. Correct using the actual sources; never invent evidence.'
-    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_VALIDATION_NOTE: '+validation_note+'\nDRAFT_JSON:\n'+json.dumps(draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON (same grouped array format as author input):\n'+encoded
+    compact_draft=dict(draft,sources=[dict(s,quote=s.get('quote','')[:180]) for s in draft['sources']])
+    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_VALIDATION_NOTE: '+validation_note+'\nDRAFT_JSON:\n'+json.dumps(compact_draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON (same grouped array format as author input):\n'+encoded
     print(json.dumps({'stage':'review_analysis'}),flush=True)
-    reviewed=free_inference(review_prompt)
+    reviewed=original_source_text(free_inference(review_prompt),clean)
     sources,chats=verify_content(reviewed,clean)
     return {'date':day.isoformat(),'period_label':day.isoformat()+' · 00:00–24:00 · UTC+5','generated_at':dt.datetime.now(LOCAL).strftime('%d.%m.%Y, %H:%M'),'title':reviewed['title'],'subtitle':reviewed['subtitle'],
             'stats':[{'label':'Сообщений','value':f'{len(rows):,}'.replace(',',' ')},{'label':'Чатов','value':str(len(chats))},{'label':'Проверенных источников','value':str(len(sources))}],
@@ -218,6 +233,9 @@ def main():
     except Exception as exc:
         asyncio.run(await_delivery(day,args.wait))
         entry=state.data['days'].setdefault(day.isoformat(),{'parts':{}})
+        safe_reasons={'Invalid evidence key','Citation does not match source','Some chats have not been summarized','Unreferenced finding','Coverage mismatch'}
+        entry['last_failure']={'type':type(exc).__name__,'reason':str(exc) if str(exc) in safe_reasons else type(exc).__name__,'run_id':os.environ.get('GITHUB_RUN_ID','')}
+        state.save()
         if not entry.get('failure_notified'):
             entry['failure_notified']='sending';state.save()
             message='THelp: выпуск за '+day.isoformat()+' пропущен: '+('бесплатная модель временно исчерпала общий лимит.' if isinstance(exc,QuotaPause) else 'сбор или проверка не завершились.')+' Платные модели не подключались. Облачное расписание остаётся активным.'

@@ -42,14 +42,24 @@ class CloudTests(unittest.TestCase):
         import datetime,copy
         rows=[{'chat_id':1,'chat_title':'Example','message_id':8,'timestamp':'2026-10-29T10:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':'Meeting tomorrow at 10:00'}]
         good={'title':'A meeting','subtitle':'Daily review','sources':[{'key':'s1','chat_id':1,'message_id':8,'quote':'Meeting tomorrow'}],'chat_summaries':[{'chat_id':1,'summary':'Discussed meeting'}],'highlights':[{'evidence':['s1']}],'actions':[],'sections':[]}
-        bad=copy.deepcopy(good);bad['sources'][0]['quote']='Invented quotation'
+        bad=copy.deepcopy(good);bad['sources'][0]['message_id']=999
         with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.free_inference',side_effect=[bad,good]) as inference:
             data=cloud_run.analyze(datetime.date(2026,10,29),rows)
             self.assertEqual(inference.call_count,2)
-            self.assertEqual(data['sources'][0]['quote'],'Meeting tomorrow')
+            self.assertEqual(data['sources'][0]['quote'],'Meeting tomorrow at 10:00')
             self.assertIn('Draft rejected',inference.call_args.args[0])
         with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.free_inference',side_effect=[bad,bad]):
             with self.assertRaises(ValueError):cloud_run.analyze(datetime.date(2026,10,29),rows)
+
+    def test_model_quotation_is_replaced_with_actual_message_not_laundered(self):
+        rows=[{'chat_id':1,'message_id':8,'text':'The actual original text.'}]
+        draft={'sources':[{'key':'s1','chat_id':1,'message_id':8,'quote':'Fabricated text.'}]}
+        result=cloud_run.original_source_text(draft,rows)
+        self.assertEqual(result['sources'][0]['quote'],'The actual original text.')
+        self.assertEqual(draft['sources'][0]['quote'],'Fabricated text.')
+        draft['sources'][0]['message_id']=999
+        result=cloud_run.original_source_text(draft,rows)
+        self.assertEqual(result['sources'][0]['message_id'],999)
 
     def test_state_encrypted_at_rest_and_bound_to_repository(self):
         key=os.urandom(32);nonce=os.urandom(12);repo='example/reports'
