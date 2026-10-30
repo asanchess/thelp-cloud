@@ -1,0 +1,11 @@
+# Private daily Telegram report engine
+
+Generic public source; no Telegram messages, user identifiers, report artifacts or credentials are stored in this repository. Telegram and model credentials live only in encrypted GitHub Actions secrets. The state branch contains AES-256-GCM encrypted delivery receipts, never transcripts or reports. Decryption key is a separate repository secret. Logs contain status codes only.
+
+Runs on standard GitHub-hosted Ubuntu runners. No paid runners, inference models, automatic top-ups or paid fallbacks. Inference uses only a fixed :free model through Phala, data_collection=deny, ZDR required, and max_price=0. A shared free quota can cause a skipped edition with an explicit Telegram notice. This is an accepted tradeoff, not a guaranteed daily SLA. GitHub schedules may be delayed and may need reactivation after repository inactivity.
+
+Daily trigger 04:37 UTC prepares yesterday's local day (UTC+5) and waits until 05:00 UTC to deliver. Late starts deliver after preparation. Manual smoke proves cloud account access, PDF rendering and bot delivery without invoking AI or claiming semantic analysis. Reruns skip confirmed delivery parts; uncertain network results require manual reconciliation. The local Windows jobs should be disabled only after the cloud handoff is verified. No historical local checkpoint is modified.
+
+Required secrets: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION, TELEGRAM_OWNER_ID, TELEGRAM_BOT_TOKEN, OPENROUTER_API_KEY, STATE_ENCRYPTION_KEY (base64 32 random bytes). Never commit these values, local report files, snapshots, model requests or model responses. No pull-request trigger uses secrets. State writes target only the state branch, with single-job concurrency.
+
+Report source is untrusted. No source instructions execute; inference has no tools or access to the runner. Exact quotes and every chat's coverage are verified before sending. Media are not downloaded or interpreted. Full HTML is escaped and blocks external resources. The brief PDF and full HTML are uploaded only to the configured owner's private bot conversation.
