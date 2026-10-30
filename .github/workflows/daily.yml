@@ -3,6 +3,7 @@ run-name: ${{ inputs.checks_only && 'Cloud verification (synthetic)' || inputs.s
 on:
   schedule:
     - cron: '37 4 * * *'
+    - cron: '17 7 * * *'
   workflow_dispatch:
     inputs:
       checks_only:
