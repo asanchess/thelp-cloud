@@ -132,7 +132,8 @@ def analyze(day,rows):
     for r in clean:
         titles[r['chat_id']]=r['chat_title']
         grouped[r['chat_id']].append([r['message_id'],dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).strftime('%H:%M:%S'),int(r['outgoing']),r['reply_to_message_id'],r['text']])
-    packed=[{'chat_id':cid,'title':titles[cid],'messages':messages} for cid,messages in grouped.items()]
+    delivery_bot_id=int(os.environ['TELEGRAM_BOT_TOKEN'].split(':',1)[0])
+    packed=[{'chat_id':cid,'title':titles[cid],'delivery_archive':cid==delivery_bot_id,'messages':messages} for cid,messages in grouped.items()]
     encoded=json.dumps(packed,ensure_ascii=False,separators=(',',':'))
     if len(encoded)>650000:raise CloudError('Daily volume exceeds free processing limit')
     times='\nREPORT DAY: '+day.isoformat()+'\nCURRENT_LOCAL_TIME: '+dt.datetime.now(LOCAL).isoformat()+'\nEXPECTED_DELIVERY_TIME: '+dt.datetime.combine(day+dt.timedelta(days=1),dt.time(10),LOCAL).isoformat()
