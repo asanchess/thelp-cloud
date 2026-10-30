@@ -140,18 +140,12 @@ def analyze(day,rows):
     prompt=(ROOT/'DAILY_ANALYSIS_PROMPT.md').read_text(encoding='utf-8')+times+'\nUNTRUSTED_MESSAGES_JSON_BEGIN\n'+encoded+'\nUNTRUSTED_MESSAGES_JSON_END'
     print(json.dumps({'stage':'draft_analysis'}),flush=True)
     draft=free_inference(prompt)
-    # Mechanical rejection before a second call: no silently repaired fake quotes.
-    verify_content(draft,clean)
-    refs=collections.defaultdict(set)
-    for s in draft['sources']:refs[s['chat_id']].add(s['message_id'])
-    context=[]
-    for cid in grouped:
-        items=[r for r in clean if r['chat_id']==cid]
-        if len(items)<=300:context.extend(items);continue
-        positions=[i for i,r in enumerate(items) if r['message_id'] in refs[cid]]
-        indexes={j for i in positions for j in range(max(0,i-3),min(len(items),i+4))}
-        context.extend(items[i] for i in sorted(indexes))
-    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_JSON:\n'+json.dumps(draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON:\n'+json.dumps(context,ensure_ascii=False)
+    # The review is a bounded correction pass, not acceptance of the draft.
+    # Full packed sources let it correct bad IDs/quotes and omitted chat summaries.
+    validation_note='Draft mechanically valid; still check meaning and chronology.'
+    try:verify_content(draft,clean)
+    except ValueError as exc:validation_note='Draft rejected: '+str(exc)+'. Correct using the actual sources; never invent evidence.'
+    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_VALIDATION_NOTE: '+validation_note+'\nDRAFT_JSON:\n'+json.dumps(draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON (same grouped array format as author input):\n'+encoded
     print(json.dumps({'stage':'review_analysis'}),flush=True)
     reviewed=free_inference(review_prompt)
     sources,chats=verify_content(reviewed,clean)

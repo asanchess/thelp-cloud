@@ -38,6 +38,19 @@ class CloudTests(unittest.TestCase):
         with patch.dict(os.environ,{'OPENROUTER_API_KEY':'test-key'}),patch('cloud_run.http_json',return_value=response):
             with self.assertRaises(cloud_run.CloudError):cloud_run.free_inference('synthetic')
 
+    def test_reviewer_can_correct_rejected_draft_before_final_verification(self):
+        import datetime,copy
+        rows=[{'chat_id':1,'chat_title':'Example','message_id':8,'timestamp':'2026-10-29T10:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':'Meeting tomorrow at 10:00'}]
+        good={'title':'A meeting','subtitle':'Daily review','sources':[{'key':'s1','chat_id':1,'message_id':8,'quote':'Meeting tomorrow'}],'chat_summaries':[{'chat_id':1,'summary':'Discussed meeting'}],'highlights':[{'evidence':['s1']}],'actions':[],'sections':[]}
+        bad=copy.deepcopy(good);bad['sources'][0]['quote']='Invented quotation'
+        with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.free_inference',side_effect=[bad,good]) as inference:
+            data=cloud_run.analyze(datetime.date(2026,10,29),rows)
+            self.assertEqual(inference.call_count,2)
+            self.assertEqual(data['sources'][0]['quote'],'Meeting tomorrow')
+            self.assertIn('Draft rejected',inference.call_args.args[0])
+        with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.free_inference',side_effect=[bad,bad]):
+            with self.assertRaises(ValueError):cloud_run.analyze(datetime.date(2026,10,29),rows)
+
     def test_state_encrypted_at_rest_and_bound_to_repository(self):
         key=os.urandom(32);nonce=os.urandom(12);repo='example/reports'
         clear={'days':{'2026-10-29':{'parts':{'summary':{'status':'sent','message_id':9}}}}}
