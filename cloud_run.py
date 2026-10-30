@@ -138,6 +138,7 @@ def analyze(day,rows):
     if len(encoded)>650000:raise CloudError('Daily volume exceeds free processing limit')
     times='\nREPORT DAY: '+day.isoformat()+'\nCURRENT_LOCAL_TIME: '+dt.datetime.now(LOCAL).isoformat()+'\nEXPECTED_DELIVERY_TIME: '+dt.datetime.combine(day+dt.timedelta(days=1),dt.time(10),LOCAL).isoformat()
     prompt=(ROOT/'DAILY_ANALYSIS_PROMPT.md').read_text(encoding='utf-8')+times+'\nUNTRUSTED_MESSAGES_JSON_BEGIN\n'+encoded+'\nUNTRUSTED_MESSAGES_JSON_END'
+    print(json.dumps({'stage':'draft_analysis'}),flush=True)
     draft=free_inference(prompt)
     # Mechanical rejection before a second call: no silently repaired fake quotes.
     verify_content(draft,clean)
@@ -151,6 +152,7 @@ def analyze(day,rows):
         indexes={j for i in positions for j in range(max(0,i-3),min(len(items),i+4))}
         context.extend(items[i] for i in sorted(indexes))
     review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_JSON:\n'+json.dumps(draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON:\n'+json.dumps(context,ensure_ascii=False)
+    print(json.dumps({'stage':'review_analysis'}),flush=True)
     reviewed=free_inference(review_prompt)
     sources,chats=verify_content(reviewed,clean)
     return {'date':day.isoformat(),'period_label':day.isoformat()+' · 00:00–24:00 · UTC+5','generated_at':dt.datetime.now(LOCAL).strftime('%d.%m.%Y, %H:%M'),'title':reviewed['title'],'subtitle':reviewed['subtitle'],
@@ -207,7 +209,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='thelp-') as tmp:
             folder=Path(tmp)
             rows=asyncio.run(collect_day(day,folder))
-            print(json.dumps({'collection_complete':True}))
+            print(json.dumps({'collection_complete':True}),flush=True)
             if args.smoke:
                 # Only metadata, no raw message content. Proves cloud connectivity and PDF delivery.
                 data={'date':day.isoformat(),'period_label':day.isoformat()+' · UTC+5','generated_at':dt.datetime.now(LOCAL).isoformat(),'title':'Облачное подключение Telegram проверено','subtitle':'Техническая проверка. Это не аналитический отчёт.','stats':[{'label':'Сообщений получено','value':str(len(rows))}],'highlights':[],'actions':[],'sections':[],'chats':[],'sources':[],'coverage':{'complete':False,'limitation':'Проверка сборщика, оформления и отправки с независимого облачного компьютера. Анализ сообщений в этом режиме не выполняется.'}}
