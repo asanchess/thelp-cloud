@@ -49,6 +49,10 @@ def render_brief(data):
     short['sections']=[];short['chats']=[]
     used={key for item in short['highlights']+short['actions'] for key in item['evidence']}
     short['sources']=[s for s in data['sources'] if s['key'] in used]
-    short['subtitle']='Два главных события и три ближайших действия. Полный разбор, все чаты и источники — в отдельном HTML-файле.'
-    short['coverage']={'complete':data['coverage']['complete'],'limitation':'Краткая редакция. Все события, действия и ограничения — в полном HTML. Медиа не распознавались.'}
+    if data.get('analysis_mode')=='source':
+        short['subtitle']='Обзор без ИИ: цитаты последних входящих сообщений из двух чатов. Отбор по времени, не по важности. Все чаты и тексты — в подробном HTML.'
+        short['coverage']=data['coverage']
+    else:
+        short['subtitle']='Два главных события и три ближайших действия. Полный разбор, все чаты и источники — в отдельном HTML-файле.'
+        short['coverage']={'complete':data['coverage']['complete'],'limitation':'Краткая редакция. Все события, действия и ограничения — в полном HTML. Медиа не распознавались.'}
     return render_report(short).replace('</head>','<style>'+PRINT_STYLE+'</style></head>',1)

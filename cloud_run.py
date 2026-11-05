@@ -29,6 +29,7 @@ ROOT=Path(__file__).resolve().parent
 
 class CloudError(RuntimeError):pass
 class QuotaPause(CloudError):pass
+class TelegramAuthorizationRequired(CloudError):pass
 
 
 def http_json(url,method='GET',body=None,headers=None,timeout=120):
@@ -112,7 +113,7 @@ async def collect_day(day,folder):
     client=TelegramClient(StringSession(os.environ['TELEGRAM_SESSION']),int(os.environ['TELEGRAM_API_ID']),os.environ['TELEGRAM_API_HASH'],receive_updates=False)
     try:
         await client.connect()
-        if not await client.is_user_authorized():raise CloudError('Telegram login expired')
+        if not await client.is_user_authorized():raise TelegramAuthorizationRequired('Telegram login expired')
         if (await client.get_me()).id!=OWNER_ID:raise CloudError('Telegram owner mismatch')
         store=Store(folder/'snapshot.sqlite3')
         await collect(client,store,start,end)
@@ -137,6 +138,60 @@ def original_source_text(result,rows):
         actual=by.get((source['chat_id'],source['message_id']))
         sources.append(dict(source,quote=actual['text']) if actual else dict(source))
     return dict(result,sources=sources)
+
+
+def source_overview(day,rows,reason):
+    """A complete source index, explicitly without AI conclusions or invented tasks."""
+    clean=sanitized_rows(rows)
+    grouped=collections.defaultdict(list)
+    sources=[]
+    delivery_bot_id=int(os.environ['TELEGRAM_BOT_TOKEN'].split(':',1)[0])
+    source_keys={}
+    for i,r in enumerate(clean,1):
+        grouped[r['chat_id']].append(r)
+        if not r['text'].strip():continue
+        key='m'+str(i);source_keys[(r['chat_id'],r['message_id'])]=key
+        cid=r['chat_id']
+        sources.append({'key':key,'chat_id':cid,'message_id':r['message_id'],'quote':r['text'],
+            'title':r['chat_title'],'time':dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).strftime('%H:%M'),
+            'url':f'https://t.me/c/{str(cid)[4:]}/{r["message_id"]}' if str(cid).startswith('-100') else None})
+    # At most one latest incoming text from each chat; no importance or deadline inference.
+    candidates=[]
+    for cid,items in grouped.items():
+        if cid==delivery_bot_id:continue
+        incoming=[r for r in items if not r['outgoing'] and r['text'].strip()]
+        if incoming:candidates.append(max(incoming,key=lambda r:r['timestamp']))
+    candidates.sort(key=lambda r:r['timestamp'],reverse=True)
+    highlights=[]
+    for r in candidates[:4]:
+        key=source_keys[(r['chat_id'],r['message_id'])]
+        text=' '.join(r['text'].split())
+        highlights.append({'title':r['chat_title'][:90] or 'Диалог','summary':text[:300]+('…' if len(text)>300 else ''),
+            'category':'Цитата · по времени','urgency':'low','where':r['chat_title'][:100],
+            'when':dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).strftime('%d.%m, %H:%M'), 'evidence':[key]})
+    chats=[]
+    for cid,items in sorted(grouped.items(),key=lambda p:(-len(p[1]),p[0])):
+        times=sorted(dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).strftime('%H:%M') for r in items)
+        chats.append({'title':items[0]['chat_title'],'count':len(items),'summary':
+            f'{len(items)} сообщений, {times[0]}–{times[-1]}. '+('Архив доставки THelp; не самостоятельные новости.' if cid==delivery_bot_id else 'Тексты приведены в источниках; смысл и обязательства автоматически не определялись.')})
+    return {'date':day.isoformat(),'period_label':day.isoformat()+' · 00:00–24:00 · UTC+5',
+        'generated_at':dt.datetime.now(LOCAL).strftime('%d.%m.%Y, %H:%M'),
+        'analysis_mode':'source','title':'Дневной обзор · без ИИ',
+        'subtitle':'Бесплатный анализ недоступен. Ниже — исходные сообщения, чаты и время; это не смысловая сводка.',
+        'stats':[{'label':'Сообщений','value':str(len(rows))},{'label':'Чатов','value':str(len(chats))},{'label':'Текстовых источников','value':str(len(sources))}],
+        'highlights':highlights,'actions':[],
+        'sections':[{'title':'Как читать этот выпуск','body':'В краткой версии — последнее входящее сообщение из четырёх недавно активных чатов. Отбор только по времени, не по важности. В подробной версии учтён каждый полученный чат и приведены все непустые тексты. Сроки, поручения и выводы ИИ не определялись.'}],
+        'chats':chats,'sources':sources,
+        'coverage':{'complete':True,'limitation':f'Сбор завершён: {len(rows)} сообщений. Анализ ИИ недоступен ({reason}). Медиа не распознавались; удалённые и недоступные сообщения не восстановлены. Секреты известных форматов скрыты.'}}
+
+
+def prepare_report(day,rows):
+    try:return analyze(day,rows)
+    except Exception as exc:
+        # No private exception text in public logs or the report.
+        reason='лимит бесплатного провайдера' if isinstance(exc,QuotaPause) else 'модель или проверка результата'
+        print(json.dumps({'stage':'source_fallback','reason':'quota' if isinstance(exc,QuotaPause) else 'analysis_unavailable'}),flush=True)
+        return source_overview(day,rows,reason)
 
 
 def analyze(day,rows):
@@ -222,23 +277,27 @@ def main():
             if args.smoke:
                 # Only metadata, no raw message content. Proves cloud connectivity and PDF delivery.
                 data={'date':day.isoformat(),'period_label':day.isoformat()+' · UTC+5','generated_at':dt.datetime.now(LOCAL).isoformat(),'title':'Облачное подключение Telegram проверено','subtitle':'Техническая проверка. Это не аналитический отчёт.','stats':[{'label':'Сообщений получено','value':str(len(rows))}],'highlights':[],'actions':[],'sections':[],'chats':[],'sources':[],'coverage':{'complete':False,'limitation':'Проверка сборщика, оформления и отправки с независимого облачного компьютера. Анализ сообщений в этом режиме не выполняется.'}}
-            elif rows:data=analyze(day,rows)
+            elif rows:data=prepare_report(day,rows)
             else:data={'date':day.isoformat(),'period_label':day.isoformat()+' · UTC+5','generated_at':dt.datetime.now(LOCAL).isoformat(),'title':'За сутки новых сообщений нет','subtitle':'Сбор доступных диалогов завершён.','stats':[{'label':'Сообщений','value':'0'}],'highlights':[],'actions':[],'sections':[],'chats':[],'sources':[],'coverage':{'complete':True,'limitation':'Недоступные диалоги и удалённые сообщения не восстановлены.'}}
             full,pdf=render_files(data,folder)
             asyncio.run(await_delivery(day,args.wait))
             if args.smoke:
                 bot=Bot();bot.send_file(pdf,'Проверка облачного запуска: ПК больше не нужен для сбора и отправки. Анализ в этом тесте не запускался.')
-            else:deliver(state,day,data,full,pdf)
-            print(json.dumps({'ok':True,'smoke':args.smoke,'analysis':not args.smoke,'model':MODEL,'cost':0}))
+            else:
+                deliver(state,day,data,full,pdf)
+                entry=state.data['days'][day.isoformat()]
+                entry['mode']=data.get('analysis_mode','ai' if rows else 'empty');state.save()
+            print(json.dumps({'ok':True,'smoke':args.smoke,'analysis':not args.smoke and data.get('analysis_mode')!='source','mode':data.get('analysis_mode','ai' if rows else 'empty'),'model':MODEL,'cost':0}))
     except Exception as exc:
         asyncio.run(await_delivery(day,args.wait))
         entry=state.data['days'].setdefault(day.isoformat(),{'parts':{}})
-        safe_reasons={'Invalid evidence key','Citation does not match source','Some chats have not been summarized','Unreferenced finding','Coverage mismatch'}
+        safe_reasons={'Invalid evidence key','Citation does not match source','Some chats have not been summarized','Unreferenced finding','Coverage mismatch','Telegram login expired','Telegram owner mismatch','Incomplete snapshot','Incomplete day'}
         entry['last_failure']={'type':type(exc).__name__,'reason':str(exc) if str(exc) in safe_reasons else type(exc).__name__,'run_id':os.environ.get('GITHUB_RUN_ID','')}
         state.save()
         if not entry.get('failure_notified'):
             entry['failure_notified']='sending';state.save()
-            message='THelp: выпуск за '+day.isoformat()+' пропущен: '+('бесплатная модель временно исчерпала общий лимит.' if isinstance(exc,QuotaPause) else 'сбор или проверка не завершились.')+' Платные модели не подключались. Облачное расписание остаётся активным.'
+            detail='сессия чтения Telegram отозвана или истекла. Нужно повторно подключить устройство; токен бота не заменяет этот вход.' if isinstance(exc,TelegramAuthorizationRequired) else 'сбор или доставка не завершились. Диагностика сохранена; возможна повторная попытка.'
+            message='THelp: выпуск за '+day.isoformat()+' не доставлен: '+detail+' Платные модели не подключались. Облачное расписание остаётся активным.'
             result=Bot().call('sendMessage',{'chat_id':OWNER_ID,'text':message})
             entry['failure_notified']=result['message_id'];state.save()
         print(json.dumps({'ok':False,'error_type':type(exc).__name__,'cost_limit':0}))

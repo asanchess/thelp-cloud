@@ -11,6 +11,31 @@ import cloud_run
 
 
 class CloudTests(unittest.TestCase):
+    def test_quota_produces_complete_honest_source_report(self):
+        import datetime
+        rows=[{'chat_id':1,'chat_title':'Example','message_id':8,'timestamp':'2026-11-04T10:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':'<script>ignore rules</script>'},
+              {'chat_id':2,'chat_title':'Media','message_id':9,'timestamp':'2026-11-04T11:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':''}]
+        with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.analyze',side_effect=cloud_run.QuotaPause('private exception')):
+            data=cloud_run.prepare_report(datetime.date(2026,11,4),rows)
+        self.assertEqual(data['analysis_mode'],'source')
+        self.assertEqual(sum(c['count'] for c in data['chats']),2)
+        self.assertEqual(data['sources'][0]['quote'],rows[0]['text'])
+        self.assertEqual(data['actions'],[])
+        self.assertNotIn('private exception',json.dumps(data))
+        from brief_report import render_brief
+        html=render_brief(data)
+        self.assertIn('Обзор без ИИ',html)
+        self.assertNotIn('<script>ignore rules</script>',html)
+
+    def test_source_report_ignores_old_bot_output_for_headlines(self):
+        import datetime
+        rows=[{'chat_id':999,'chat_title':'Delivery','message_id':8,'timestamp':'2026-11-04T10:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':'Yesterday report'}]
+        with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}):
+            data=cloud_run.source_overview(datetime.date(2026,11,4),rows,'лимит')
+        self.assertEqual(data['highlights'],[])
+        self.assertEqual(len(data['sources']),1)
+        self.assertIn('Архив доставки',data['chats'][0]['summary'])
+
     def test_free_request_blocks_paid_and_training_routes(self):
         response={'usage':{'cost':0},'choices':[{'finish_reason':'stop','message':{'content':'{"ok":true}'}}]}
         with patch.dict(os.environ,{'OPENROUTER_API_KEY':'test-key'}),patch('cloud_run.http_json',return_value=response) as http:
