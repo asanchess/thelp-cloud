@@ -10,6 +10,7 @@ import time
 import urllib.request
 import shutil
 from pathlib import PurePosixPath
+from jsonschema import validate,ValidationError
 
 MODEL_REV='bc640142c66e1fdd12af0bd68f40445458f3869b'
 MODEL_NAME='Qwen3-4B-Q4_K_M.gguf'
@@ -110,5 +111,8 @@ class LocalModel:
         content=choices[0]['message'].get('content','')
         if not content:raise OfflineError('Empty local model output')
         self.timings.append({'seconds':round(time.monotonic()-started,2),'usage':result.get('usage',{})})
-        try:return json.loads(content)
-        except ValueError:raise OfflineError('Invalid local JSON') from None
+        try:
+            parsed=json.loads(content)
+            validate(parsed,schema)
+            return parsed
+        except (ValueError,ValidationError):raise OfflineError('Invalid local JSON schema') from None

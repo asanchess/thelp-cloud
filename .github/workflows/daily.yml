@@ -2,7 +2,7 @@ name: Daily Telegram report
 run-name: ${{ inputs.checks_only && 'Cloud verification (synthetic)' || inputs.smoke && 'Cloud collection and delivery check' || 'Daily Telegram report' }}
 on:
   schedule:
-    - cron: '37 4 * * *'
+    - cron: '37 3 * * *'
     - cron: '17 7 * * *'
   workflow_dispatch:
     inputs:
@@ -26,7 +26,7 @@ concurrency:
 jobs:
   report:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -39,7 +39,7 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements.txt
           python -m playwright install --with-deps chromium
       - name: Validate code with synthetic data
-        run: python -m unittest test_cloud test_reporting -q
+        run: python -m unittest test_cloud test_offline test_reporting -q
       - name: Collect, verify, render and deliver privately
         if: ${{ !inputs.checks_only }}
         env:

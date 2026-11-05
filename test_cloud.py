@@ -11,21 +11,47 @@ import cloud_run
 
 
 class CloudTests(unittest.TestCase):
-    def test_quota_produces_complete_honest_source_report(self):
+    def test_quota_uses_private_offline_ai_not_source_only_report(self):
         import datetime
         rows=[{'chat_id':1,'chat_title':'Example','message_id':8,'timestamp':'2026-11-04T10:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':'<script>ignore rules</script>'},
               {'chat_id':2,'chat_title':'Media','message_id':9,'timestamp':'2026-11-04T11:00:00+00:00','outgoing':False,'reply_to_message_id':None,'text':''}]
-        with patch.dict(os.environ,{'TELEGRAM_BOT_TOKEN':'999:synthetic'}),patch('cloud_run.analyze',side_effect=cloud_run.QuotaPause('private exception')):
+        expected={'analysis_mode':'local-ai','title':'AI report'}
+        with patch('cloud_run.analyze',side_effect=cloud_run.QuotaPause('private exception')),patch('offline_report.analyze_offline',return_value=expected) as offline,patch('cloud_run.source_overview') as raw:
             data=cloud_run.prepare_report(datetime.date(2026,11,4),rows)
-        self.assertEqual(data['analysis_mode'],'source')
-        self.assertEqual(sum(c['count'] for c in data['chats']),2)
-        self.assertEqual(data['sources'][0]['quote'],rows[0]['text'])
-        self.assertEqual(data['actions'],[])
-        self.assertNotIn('private exception',json.dumps(data))
-        from brief_report import render_brief
-        html=render_brief(data)
-        self.assertIn('Обзор без ИИ',html)
-        self.assertNotIn('<script>ignore rules</script>',html)
+        self.assertEqual(data,expected)
+        offline.assert_called_once();raw.assert_not_called()
+
+    def test_all_ai_failures_do_not_emit_source_report(self):
+        import datetime
+        from offline_llm import OfflineError
+        with patch('cloud_run.analyze',side_effect=cloud_run.QuotaPause('quota')),patch('offline_report.analyze_offline',side_effect=OfflineError('failed')),patch('cloud_run.source_overview') as raw:
+            with self.assertRaises(OfflineError):cloud_run.prepare_report(datetime.date(2026,11,4),[])
+            raw.assert_not_called()
+
+    def test_source_edition_is_archived_before_verified_ai_replacement(self):
+        import datetime,copy
+        class MemoryState:
+            def __init__(self):
+                self.data={'days':{'2026-11-04':{'mode':'source','parts':{k:{'status':'sent','message_id':i} for i,k in enumerate(['summary','pdf','html'],1)}}}}
+                self.saves=[]
+            def save(self):self.saves.append(copy.deepcopy(self.data))
+        state=MemoryState()
+        with patch('cloud_run.Bot') as bot:
+            bot.return_value.send_summary.return_value={'message_id':10}
+            bot.return_value.send_file.side_effect=[{'message_id':11},{'message_id':12}]
+            cloud_run.deliver(state,datetime.date(2026,11,4),{'analysis_mode':'local-ai'},'html','pdf')
+        entry=state.data['days']['2026-11-04']
+        self.assertEqual(entry['source_parts']['summary']['message_id'],1)
+        self.assertEqual(entry['parts']['summary']['message_id'],10)
+        self.assertEqual(state.saves[0]['days']['2026-11-04']['mode'],'ai_pending')
+
+    def test_raw_source_delivery_is_rejected(self):
+        import datetime
+        class MemoryState:
+            data={'days':{}}
+        with patch('cloud_run.Bot') as bot:
+            with self.assertRaises(cloud_run.CloudError):cloud_run.deliver(MemoryState(),datetime.date(2026,11,4),{'analysis_mode':'source'},None,None)
+            bot.assert_not_called()
 
     def test_source_report_ignores_old_bot_output_for_headlines(self):
         import datetime

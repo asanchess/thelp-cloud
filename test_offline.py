@@ -39,4 +39,74 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(model.infer('test',schema,max_tokens=30),{'answer':'yes'})
         self.assertEqual(captured[0]['response_format']['json_schema']['schema'],schema)
 
+    def test_valid_json_with_missing_required_fields_is_not_accepted(self):
+        model=LocalModel(Path('.'),context=4096);model.tokens=lambda text:5
+        model.request=lambda *args,**kwargs:{'choices':[{'finish_reason':'stop','message':{'content':'{}'}}]}
+        with self.assertRaises(OfflineError):model.infer('test',{'type':'object','required':['sources']},max_tokens=30)
+
+    def test_partition_preserves_complete_text_including_oversized_message(self):
+        from offline_report import batches
+        rows=[{'chat_id':1,'message_id':1,'timestamp':'2026-11-04T00:00:00+00:00','text':'начало-'+('длинный текст '*180)+'-конец'},
+              {'chat_id':2,'message_id':2,'timestamp':'2026-11-04T01:00:00+00:00','text':''},
+              {'chat_id':1,'message_id':3,'timestamp':'2026-11-04T02:00:00+00:00','text':'отмена'}]
+        parts=list(batches(rows,max_chars=1000))
+        flat=[item for batch in parts for item in batch]
+        self.assertGreater(len(parts),1)
+        for row in rows:
+            self.assertEqual(''.join(r['text'] for r in flat if r['chat_id']==row['chat_id'] and r['message_id']==row['message_id']),row['text'])
+        self.assertEqual(sum(r['message_id']==2 for r in flat),1)
+
+    def test_editorial_selection_cannot_invent_evidence(self):
+        import datetime
+        from offline_report import finalize
+        from cloud_run import CloudError
+        row={'chat_id':1,'chat_title':'Study','message_id':1,'timestamp':'2026-11-04T00:00:00+00:00','text':'Exam on November 6','outgoing':False,'reply_to_message_id':None}
+        part={'sources':[{'key':'s1','chat_id':1,'message_id':1,'quote':'Exam on November 6'}],
+              '_chat_summaries':[{'chat_id':1,'summary':'Discussed an exam'}],
+              'sections':[],'highlights':[{'title':'Exam','summary':'Exam','urgency':'high','evidence':['s1']}],'actions':[]}
+        class Model:
+            context=32000
+            def tokens(self,text):return 100
+            def infer(self,*args,**kwargs):return {'title':'Exam','subtitle':'Review','highlights':[{'evidence':['fake']}],'actions':[],'sections':[]}
+        with self.assertRaises(CloudError):finalize(datetime.date(2026,11,4),[row],[part],Model())
+
+    def test_editor_sees_cancellation_even_when_it_is_not_among_last_three_messages(self):
+        import datetime
+        from offline_report import finalize
+        rows=[]
+        for n,text in enumerate(['Bring the documents','Canceled, do not bring them','Chat one','Chat two','Chat three'],1):
+            rows.append({'chat_id':1,'chat_title':'Task','message_id':n,'timestamp':f'2026-11-04T0{n}:00:00+00:00','text':text,'outgoing':False,'reply_to_message_id':None})
+        part={'sources':[{'key':'s1','chat_id':1,'message_id':1,'quote':'Bring the documents'}],
+              '_chat_summaries':[{'chat_id':1,'summary':'Documents were discussed'}],
+              'sections':[],'highlights':[],'actions':[{'text':'Bring documents','priority':'high','evidence':['s1']}]}
+        class Model:
+            context=32000
+            def __init__(self):self.prompts=[]
+            def tokens(self,text):return 100
+            def infer(self,prompt,*args,**kwargs):
+                self.prompts.append(prompt)
+                return {'title':'Canceled task','subtitle':'Review','highlights':[],'actions':[],'sections':[]}
+        model=Model();result=finalize(datetime.date(2026,11,4),rows,[part],model)
+        self.assertTrue(all('Canceled, do not bring them' in prompt for prompt in model.prompts))
+        self.assertEqual(result['actions'],[])
+
+    def test_fake_section_citation_is_rejected(self):
+        from report_analysis import verify_content
+        for key in ['s999','999','_fake','-fake']:
+            result={'sources':[],'chat_summaries':[],'highlights':[],'actions':[],'sections':[{'body':f'Invented evidence [{key}]'}]}
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'Unreferenced section evidence'):verify_content(result,[])
+
+    def test_batch_grammar_requires_every_chat_and_uses_trusted_source_ids(self):
+        from offline_report import batch_inference
+        from jsonschema import validate,ValidationError
+        rows=[{'chat_id':10,'message_id':11,'text':'Actual original'}, {'chat_id':20,'message_id':21,'text':''}]
+        class Model:
+            def infer(self,prompt,schema,**kwargs):
+                self.schema=schema
+                return {'title':'t','subtitle':'s','sources':[],'chat_summaries':{'10':'Text','20':'Media'},'highlights':[{'evidence':['s1']}],'actions':[],'sections':[]}
+        model=Model();result=batch_inference(model,rows)('prompt')
+        self.assertEqual(result['sources'],[{'key':'s1','chat_id':10,'message_id':11,'quote':'Actual original'}])
+        self.assertEqual(model.schema['properties']['chat_summaries']['required'],['10','20'])
+        with self.assertRaises(ValidationError):validate({'10':'Missing media chat'},model.schema['properties']['chat_summaries'])
+
 if __name__=='__main__':unittest.main()

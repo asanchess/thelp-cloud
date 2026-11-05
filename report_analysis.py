@@ -37,6 +37,9 @@ def verify_content(result,rows):
         raise ValueError('Some chats have not been summarized')
     for item in result['highlights']+result['actions']:
         if not item['evidence'] or not set(item['evidence'])<=keys:raise ValueError('Unreferenced finding')
+    for section in result.get('sections',[]):
+        refs=set(re.findall(r'\[([A-Za-z0-9_-]+)\]',section.get('body','')))
+        if not refs<=keys:raise ValueError('Unreferenced section evidence')
     chats=[{'title':items[0]['chat_title'],'count':len(items),'summary':descriptions[cid]} for cid,items in sorted(grouped.items(),key=lambda p:-len(p[1]))]
     if sum(c['count'] for c in chats)!=len(rows):raise ValueError('Coverage mismatch')
     return sources,chats

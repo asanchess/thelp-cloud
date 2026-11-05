@@ -185,16 +185,21 @@ def source_overview(day,rows,reason):
         'coverage':{'complete':True,'limitation':f'Сбор завершён: {len(rows)} сообщений. Анализ ИИ недоступен ({reason}). Медиа не распознавались; удалённые и недоступные сообщения не восстановлены. Секреты известных форматов скрыты.'}}
 
 
-def prepare_report(day,rows):
-    try:return analyze(day,rows)
+def prepare_report(day,rows,folder=None):
+    try:
+        result=analyze(day,rows)
+        result['analysis_mode']='ai'
+        return result
     except Exception as exc:
-        # No private exception text in public logs or the report.
-        reason='лимит бесплатного провайдера' if isinstance(exc,QuotaPause) else 'модель или проверка результата'
-        print(json.dumps({'stage':'source_fallback','reason':'quota' if isinstance(exc,QuotaPause) else 'analysis_unavailable'}),flush=True)
-        return source_overview(day,rows,reason)
+        # AI analysis is mandatory. Never substitute a source-only digest.
+        print(json.dumps({'stage':'offline_ai_fallback','reason':'quota' if isinstance(exc,QuotaPause) else 'analysis_unavailable'}),flush=True)
+        from offline_report import analyze_offline
+        if folder is not None:return analyze_offline(day,rows,folder)
+        with tempfile.TemporaryDirectory(prefix='thelp-ai-') as tmp:return analyze_offline(day,rows,Path(tmp))
 
 
-def analyze(day,rows):
+def analyze(day,rows,inference=None,context_note='',review=True):
+    inference=inference or free_inference
     clean=sanitized_rows(rows)
     grouped=collections.defaultdict(list)
     titles={}
@@ -206,22 +211,27 @@ def analyze(day,rows):
     encoded=json.dumps(packed,ensure_ascii=False,separators=(',',':'))
     if len(encoded)>650000:raise CloudError('Daily volume exceeds free processing limit')
     times='\nREPORT DAY: '+day.isoformat()+'\nCURRENT_LOCAL_TIME: '+dt.datetime.now(LOCAL).isoformat()+'\nEXPECTED_DELIVERY_TIME: '+dt.datetime.combine(day+dt.timedelta(days=1),dt.time(10),LOCAL).isoformat()
-    prompt=(ROOT/'DAILY_ANALYSIS_PROMPT.md').read_text(encoding='utf-8')+times+'\nUNTRUSTED_MESSAGES_JSON_BEGIN\n'+encoded+'\nUNTRUSTED_MESSAGES_JSON_END'
+    prompt=(ROOT/'DAILY_ANALYSIS_PROMPT.md').read_text(encoding='utf-8')+times+context_note+'\nUNTRUSTED_MESSAGES_JSON_BEGIN\n'+encoded+'\nUNTRUSTED_MESSAGES_JSON_END'
     print(json.dumps({'stage':'draft_analysis'}),flush=True)
-    draft=original_source_text(free_inference(prompt),clean)
+    draft=original_source_text(inference(prompt),clean)
     # The review is a bounded correction pass, not acceptance of the draft.
     # Full packed sources let it correct bad IDs/quotes and omitted chat summaries.
     validation_note='Draft mechanically valid; still check meaning and chronology.'
+    draft_valid=True
     try:verify_content(draft,clean)
-    except ValueError as exc:validation_note='Draft rejected: '+str(exc)+'. Correct using the actual sources; never invent evidence.'
+    except ValueError as exc:
+        draft_valid=False
+        validation_note='Draft rejected: '+str(exc)+'. Correct using the actual sources; never invent evidence.'
     compact_draft=dict(draft,sources=[dict(s,quote=s.get('quote','')[:180]) for s in draft['sources']])
-    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+'\nDRAFT_VALIDATION_NOTE: '+validation_note+'\nDRAFT_JSON:\n'+json.dumps(compact_draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON (same grouped array format as author input):\n'+encoded
-    print(json.dumps({'stage':'review_analysis'}),flush=True)
-    reviewed=original_source_text(free_inference(review_prompt),clean)
+    review_prompt=(ROOT/'DAILY_REVIEW_PROMPT.md').read_text(encoding='utf-8')+times+context_note+'\nDRAFT_VALIDATION_NOTE: '+validation_note+'\nDRAFT_JSON:\n'+json.dumps(compact_draft,ensure_ascii=False)+'\nSOURCE_CONTEXT_JSON (same grouped array format as author input):\n'+encoded
+    if review or not draft_valid:
+        print(json.dumps({'stage':'review_analysis'}),flush=True)
+        reviewed=original_source_text(inference(review_prompt),clean)
+    else:reviewed=draft
     sources,chats=verify_content(reviewed,clean)
     return {'date':day.isoformat(),'period_label':day.isoformat()+' · 00:00–24:00 · UTC+5','generated_at':dt.datetime.now(LOCAL).strftime('%d.%m.%Y, %H:%M'),'title':reviewed['title'],'subtitle':reviewed['subtitle'],
             'stats':[{'label':'Сообщений','value':f'{len(rows):,}'.replace(',',' ')},{'label':'Чатов','value':str(len(chats))},{'label':'Проверенных источников','value':str(len(sources))}],
-            'highlights':reviewed['highlights'],'actions':reviewed['actions'],'sections':reviewed['sections'],'chats':chats,'sources':sources,
+            'highlights':reviewed['highlights'],'actions':reviewed['actions'],'sections':reviewed['sections'],'chats':chats,'sources':sources,'_chat_summaries':reviewed['chat_summaries'],
             'coverage':{'complete':True,'limitation':f'Учтено {len(rows)} сообщений из доступных чатов. {sum(not r["text"] for r in rows)} записей без текста; медиа не распознавались. Удалённые и недоступные сообщения не восстановлены. Точные цитаты и охват чатов проверены автоматически. Анализ ИИ может содержать ошибки.'}}
 
 
@@ -249,6 +259,11 @@ def render_files(data,folder):
 
 def deliver(state,day,data,full,pdf):
     entry=state.data['days'].setdefault(day.isoformat(),{'parts':{}})
+    if data.get('analysis_mode')=='source':raise CloudError('AI analysis required')
+    if entry.get('mode')=='source':
+        if any(p.get('status')!='sent' for p in entry.get('parts',{}).values()):raise CloudError('Previous delivery outcome is uncertain')
+        entry['source_parts']=entry.get('parts',{})
+        entry['parts']={};entry['mode']='ai_pending';state.save()
     bot=Bot()
     for key,path,caption in [('summary',None,None),('pdf',pdf,'Краткий выпуск · '+day.isoformat()),('html',full,'Подробный отчёт · '+day.isoformat()+' · открой в браузере')]:
         part=entry['parts'].get(key)
@@ -267,18 +282,20 @@ def main():
     if not OWNER_ID or day>=dt.datetime.now(LOCAL).date():raise CloudError('Invalid owner or report date')
     state=State()
     entry=state.data['days'].get(day.isoformat(),{})
-    if all(entry.get('parts',{}).get(k,{}).get('status')=='sent' for k in ('summary','pdf','html')):
+    if entry.get('mode') in ('ai','local-ai') and all(entry.get('parts',{}).get(k,{}).get('status')=='sent' for k in ('summary','pdf','html')):
         print(json.dumps({'ok':True,'already_delivered':True}));return
     try:
         with tempfile.TemporaryDirectory(prefix='thelp-') as tmp:
             folder=Path(tmp)
             rows=asyncio.run(collect_day(day,folder))
+            entry=state.data['days'].setdefault(day.isoformat(),{'parts':{}})
+            entry['collection']={'messages':len(rows),'chats':len({r['chat_id'] for r in rows}),'text_chars':sum(len(r['text'] or '') for r in rows)}
+            state.save()
             print(json.dumps({'collection_complete':True}),flush=True)
             if args.smoke:
                 # Only metadata, no raw message content. Proves cloud connectivity and PDF delivery.
                 data={'date':day.isoformat(),'period_label':day.isoformat()+' · UTC+5','generated_at':dt.datetime.now(LOCAL).isoformat(),'title':'Облачное подключение Telegram проверено','subtitle':'Техническая проверка. Это не аналитический отчёт.','stats':[{'label':'Сообщений получено','value':str(len(rows))}],'highlights':[],'actions':[],'sections':[],'chats':[],'sources':[],'coverage':{'complete':False,'limitation':'Проверка сборщика, оформления и отправки с независимого облачного компьютера. Анализ сообщений в этом режиме не выполняется.'}}
-            elif rows:data=prepare_report(day,rows)
-            else:data={'date':day.isoformat(),'period_label':day.isoformat()+' · UTC+5','generated_at':dt.datetime.now(LOCAL).isoformat(),'title':'За сутки новых сообщений нет','subtitle':'Сбор доступных диалогов завершён.','stats':[{'label':'Сообщений','value':'0'}],'highlights':[],'actions':[],'sections':[],'chats':[],'sources':[],'coverage':{'complete':True,'limitation':'Недоступные диалоги и удалённые сообщения не восстановлены.'}}
+            else:data=prepare_report(day,rows,folder)
             full,pdf=render_files(data,folder)
             asyncio.run(await_delivery(day,args.wait))
             if args.smoke:
@@ -287,19 +304,14 @@ def main():
                 deliver(state,day,data,full,pdf)
                 entry=state.data['days'][day.isoformat()]
                 entry['mode']=data.get('analysis_mode','ai' if rows else 'empty');state.save()
-            print(json.dumps({'ok':True,'smoke':args.smoke,'analysis':not args.smoke and data.get('analysis_mode')!='source','mode':data.get('analysis_mode','ai' if rows else 'empty'),'model':MODEL,'cost':0}))
+            print(json.dumps({'ok':True,'smoke':args.smoke,'analysis':not args.smoke and data.get('analysis_mode') in ('ai','local-ai'),'mode':data.get('analysis_mode','smoke'),'model':data.get('ai_model',MODEL),'cost':0}))
     except Exception as exc:
         asyncio.run(await_delivery(day,args.wait))
         entry=state.data['days'].setdefault(day.isoformat(),{'parts':{}})
-        safe_reasons={'Invalid evidence key','Citation does not match source','Some chats have not been summarized','Unreferenced finding','Coverage mismatch','Telegram login expired','Telegram owner mismatch','Incomplete snapshot','Incomplete day'}
+        safe_reasons={'Invalid evidence key','Citation does not match source','Some chats have not been summarized','Unreferenced finding','Unreferenced section evidence','Coverage mismatch','Telegram login expired','Telegram owner mismatch','Incomplete snapshot','Incomplete day'}
         entry['last_failure']={'type':type(exc).__name__,'reason':str(exc) if str(exc) in safe_reasons else type(exc).__name__,'run_id':os.environ.get('GITHUB_RUN_ID','')}
         state.save()
-        if not entry.get('failure_notified'):
-            entry['failure_notified']='sending';state.save()
-            detail='сессия чтения Telegram отозвана или истекла. Нужно повторно подключить устройство; токен бота не заменяет этот вход.' if isinstance(exc,TelegramAuthorizationRequired) else 'сбор или доставка не завершились. Диагностика сохранена; возможна повторная попытка.'
-            message='THelp: выпуск за '+day.isoformat()+' не доставлен: '+detail+' Платные модели не подключались. Облачное расписание остаётся активным.'
-            result=Bot().call('sendMessage',{'chat_id':OWNER_ID,'text':message})
-            entry['failure_notified']=result['message_id'];state.save()
+        # Owner requested only ready AI reports, no intermediate failure/status messages.
         print(json.dumps({'ok':False,'error_type':type(exc).__name__,'cost_limit':0}))
         raise SystemExit(1)
 
