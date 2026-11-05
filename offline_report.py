@@ -201,7 +201,7 @@ def remove_expired_actions(result,now):
         else:highlights.append(item)
     for item in result['actions']:
         when=deadline(item.get('when',''))
-        if when is None or when>=now:kept.append(item)
+        if when is None or when>=now:kept.append(dict(item,state='Выполнение не проверено'))
         else:record(item)
     sections=list(result.get('sections',[]))
     if past:sections.append({'title':'Сроки, уже прошедшие к выпуску','body':'\n'.join(past)})

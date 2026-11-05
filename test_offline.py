@@ -148,4 +148,13 @@ class OfflineTests(unittest.TestCase):
         self.assertIn('уже прошло',fixed['sections'][0]['body'])
         self.assertIn('[m4]',fixed['sections'][0]['body'])
 
+    def test_model_progress_state_is_not_presented_as_verified_execution(self):
+        import datetime
+        from offline_report import remove_expired_actions
+        from report_analysis import LOCAL
+        draft={'actions':[{'text':'Prepare code','when':'Срок не указан','state':'в процессе'}]}
+        fixed=remove_expired_actions(draft,datetime.datetime(2026,11,5,10,tzinfo=LOCAL))
+        self.assertEqual(fixed['actions'][0]['state'],'Выполнение не проверено')
+        self.assertEqual(draft['actions'][0]['state'],'в процессе')
+
 if __name__=='__main__':unittest.main()
