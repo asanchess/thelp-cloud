@@ -22,10 +22,10 @@ def batch_inference(model,rows,max_tokens=3000):
         schema['properties'][field]['maxItems']=3 if sources else 0
         schema['properties'][field]['items']['properties']['evidence']={'type':'array','items':{'type':'string','enum':list(sources)},'minItems':1} if sources else {'type':'array','items':{'type':'string'},'maxItems':0}
     schema['properties']['sections']['maxItems']=3
-    index=[{'key':key,'chat_id':r['chat_id'],'message_id':r['message_id']} for key,r in sources.items()]
+    index=[[key,r['chat_id'],r['message_id']] for key,r in sources.items()]
     suffix=('\nTRUSTED SERIALIZATION OVERRIDE: sources is an array of existing source KEY STRINGS, not source objects. '
         'chat_summaries is an OBJECT: each required chat-id key maps to one Russian summary string, not an array. '
-        'Every evidence array uses keys from SOURCE_KEY_INDEX. Other report fields retain their usual shape. '
+        'Every evidence array uses keys from SOURCE_KEY_INDEX, an array of [key, chat_id, message_id]. Other report fields retain their usual shape. '
         'Summarize every chat, including empty media and advertising. Never invent citations.\nSOURCE_KEY_INDEX: '+json.dumps(index))
     def infer(prompt):
         result=model.infer(prompt+suffix,schema,max_tokens=max_tokens)
@@ -43,17 +43,19 @@ def batches(rows,max_chars=12000):
     """Keep small conversations together; split long text without discarding it."""
     grouped=collections.defaultdict(list)
     for row in rows:grouped[row['chat_id']].append(row)
-    current=[];size=0
+    current=[];size=0;included=set()
     for items in grouped.values():
         for row in sorted(items,key=lambda r:(r['timestamp'],r['message_id'])):
             text=row['text'] or ''
             fragments=[text[i:i+max_chars//2] for i in range(0,len(text),max_chars//2)] or ['']
             for fragment in fragments:
                 item=dict(row,text=fragment)
-                length=len(json.dumps(item,ensure_ascii=False))
+                # Match the compact wire representation rather than repeated row metadata.
+                length=len(json.dumps([item['message_id'],item['timestamp'][-14:-6],int(item.get('outgoing',False)),item.get('reply_to_message_id'),fragment],ensure_ascii=False))
+                if item['chat_id'] not in included:length+=len(str(item['chat_id']))+len(item.get('chat_title',''))+80
                 if current and size+length>max_chars:
-                    yield current;current=[];size=0
-                current.append(item);size+=length
+                    yield current;current=[];size=0;included=set()
+                current.append(item);size+=length;included.add(item['chat_id'])
     if current:yield current
 
 def namespace(data,prefix):
@@ -121,7 +123,10 @@ def finalize(day,rows,parts,model):
         keys={s['key'] for s in sources if s['chat_id'] in chat_ids}
         conversation=[]
         for cid in chat_ids:
-            conversation.extend(dict(r,key=key_by_row.get((r['chat_id'],r['message_id'])),timestamp=dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).isoformat()) for r in sorted((r for r in rows if r['chat_id']==cid),key=lambda r:(r['timestamp'],r['message_id'])))
+            items=sorted((r for r in rows if r['chat_id']==cid),key=lambda r:(r['timestamp'],r['message_id']))
+            conversation.append({'chat_id':cid,'title':items[0]['chat_title'],
+                'format':'[source_key, message_id, time_UTC_plus_5, outgoing, reply_message_id, text]',
+                'messages':[[key_by_row.get((r['chat_id'],r['message_id'])),r['message_id'],dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).strftime('%H:%M:%S'),int(r['outgoing']),r['reply_to_message_id'],r['text']] for r in items]})
         return instruction+json.dumps({'notes':[{'kind':c['kind'],**c['item']} for c in chosen],
             'complete_selected_conversations':conversation},ensure_ascii=False),keys
     while True:
