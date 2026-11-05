@@ -115,10 +115,10 @@ def finalize(day,rows,parts,model):
         # Include complete original cited messages and latest chat context (incl cancellations).
         for key in sorted(keys):
             s=by_key[key];r=by_row[(s['chat_id'],s['message_id'])]
-            evidence.append({'key':key,'chat_id':r['chat_id'],'message_id':r['message_id'],'time':r['timestamp'],'text':r['text']})
+            evidence.append({'key':key,'chat_id':r['chat_id'],'message_id':r['message_id'],'time':dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).isoformat(),'text':r['text']})
         conversation=[]
         for cid in chat_ids:
-            conversation.extend(sorted((r for r in rows if r['chat_id']==cid),key=lambda r:(r['timestamp'],r['message_id'])))
+            conversation.extend(dict(r,timestamp=dt.datetime.fromisoformat(r['timestamp']).astimezone(LOCAL).isoformat()) for r in sorted((r for r in rows if r['chat_id']==cid),key=lambda r:(r['timestamp'],r['message_id'])))
         return instruction+json.dumps({'notes':[{'kind':c['kind'],**c['item']} for c in chosen],
             'original_sources':evidence,'complete_selected_conversations':conversation},ensure_ascii=False),keys
     while True:

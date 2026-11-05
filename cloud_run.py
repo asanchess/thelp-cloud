@@ -265,6 +265,8 @@ def deliver(state,day,data,full,pdf):
         entry['source_parts']=entry.get('parts',{})
         entry['parts']={};entry['mode']='ai_pending';state.save()
     bot=Bot()
+    # Check the message format before marking any network delivery uncertain.
+    if not entry['parts'].get('summary'):bot.summary(data)
     for key,path,caption in [('summary',None,None),('pdf',pdf,'Краткий выпуск · '+day.isoformat()),('html',full,'Подробный отчёт · '+day.isoformat()+' · открой в браузере')]:
         part=entry['parts'].get(key)
         if part:

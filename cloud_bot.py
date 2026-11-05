@@ -47,9 +47,18 @@ class Bot:
 
     def summary(self, data):
         esc=html.escape
-        lines=[f'<b>THelp · {esc(data["date"])}</b>',f'<b>{esc(data["title"])}</b>','']
+        def fit(value,budget):
+            output=[];size=0
+            for char in str(value):
+                encoded=esc(char)
+                if size+len(encoded)>budget:return ''.join(output)+'…'
+                output.append(encoded);size+=len(encoded)
+            return ''.join(output)
+        lines=[f'<b>THelp · {esc(data["date"])}</b>',f'<b>{fit(data["title"],180)}</b>','']
         for n,h in enumerate(data['highlights'][:4],1):
-            lines.extend([f'<b>{n}. {esc(h["title"])}</b>',esc(h['summary']),f'<i>Где:</i> {esc(h["where"])}',f'<i>Когда:</i> {esc(h["when"])}',''])
+            item=[f'<b>{n}. {fit(h["title"],160)}</b>',fit(h['summary'],480),f'<i>Где:</i> {fit(h["where"],120)}',f'<i>Когда:</i> {fit(h["when"],120)}','']
+            if len('\n'.join(lines+item))>3600:break
+            lines.extend(item)
         lines.append('Краткий PDF и подробный HTML — в следующих файлах. В HTML нажми «Подробный отчёт».')
         text='\n'.join(lines)
         if len(text)>3900:

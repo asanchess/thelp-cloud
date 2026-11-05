@@ -45,6 +45,14 @@ class CloudTests(unittest.TestCase):
         self.assertEqual(entry['parts']['summary']['message_id'],10)
         self.assertEqual(state.saves[0]['days']['2026-11-04']['mode'],'ai_pending')
 
+    def test_long_summary_stays_bounded_and_escaped_before_delivery(self):
+        from cloud_bot import Bot
+        item={'title':'<&'*300,'summary':'<script>&'*1000,'where':'&'*500,'when':'<'*500}
+        result=Bot(token='synthetic').summary({'date':'2026-11-04','title':'&'*300,'highlights':[item]*5})
+        self.assertLess(len(result),3900)
+        self.assertNotIn('<script>',result)
+        self.assertIn('Краткий PDF',result)
+
     def test_raw_source_delivery_is_rejected(self):
         import datetime
         class MemoryState:

@@ -21,6 +21,12 @@ def main():
         # Synthetic bot id; never a real credential.
         import os
         os.environ['TELEGRAM_BOT_TOKEN']='999:synthetic'
-        result=cloud_run.analyze(datetime.date(2026,11,4),rows,inference=batch_inference(model,rows,max_tokens=3500))
+        samples=[];infer=batch_inference(model,rows,max_tokens=3500)
+        def recorded(prompt):
+            sample=infer(prompt);samples.append(sample);return sample
+        try:result=cloud_run.analyze(datetime.date(2026,11,4),rows,inference=recorded)
+        except Exception as exc:
+            print(json.dumps({'synthetic':True,'error_type':type(exc).__name__,'samples':samples,'timings':model.timings},ensure_ascii=False))
+            raise
         print(json.dumps({'synthetic':True,'sample':result,'timings':model.timings},ensure_ascii=False))
 if __name__=='__main__':main()
