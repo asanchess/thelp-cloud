@@ -1,9 +1,9 @@
 """Public synthetic quality sample. Never connects to Telegram or loads secrets."""
-import datetime,json,tempfile,time
+import datetime,json,tempfile,time,sys
 from pathlib import Path
 import cloud_run
 from offline_llm import LocalModel
-from offline_report import batch_inference
+from offline_report import batch_inference,finalize
 
 def main():
     rows=[]
@@ -21,6 +21,15 @@ def main():
         # Synthetic bot id; never a real credential.
         import os
         os.environ['TELEGRAM_BOT_TOKEN']='999:synthetic'
+        if '--editor-only' in sys.argv:
+            part=json.loads(Path('synthetic_draft.json').read_text(encoding='utf-8'))
+            result=finalize(datetime.date(2026,11,4),rows,[part],model)
+            for item in result['highlights']+result['actions']:
+                if '5 ноября' in item.get('when','') and '18' in item['when']:
+                    assert 'm2' in item['evidence'],'Meeting time must cite its actual message'
+            assert all('4 ноября' not in item.get('when','') for item in result['actions']),'Expired registration must not be an actionable deadline'
+            print(json.dumps({'synthetic':True,'sample':result,'timings':model.timings},ensure_ascii=False))
+            return
         samples=[];infer=batch_inference(model,rows,max_tokens=3500)
         def recorded(prompt):
             sample=infer(prompt);samples.append(sample);return sample

@@ -109,4 +109,12 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(model.schema['properties']['chat_summaries']['required'],['10','20'])
         with self.assertRaises(ValidationError):validate({'10':'Missing media chat'},model.schema['properties']['chat_summaries'])
 
+    def test_past_deadlines_are_not_sent_as_current_actions(self):
+        import datetime
+        from offline_report import remove_expired_actions
+        from report_analysis import LOCAL
+        now=datetime.datetime(2026,11,5,15,30,tzinfo=LOCAL)
+        result={'actions':[{'text':'Register','when':'4 ноября в 17:00'}, {'text':'Meeting','when':'5 ноября в 18:00'}, {'text':'Exam','when':'06.11.2026, 11:00'}, {'text':'Past ISO','when':'2026-11-04 17:00'}, {'text':'Ask','when':'Срок не указан'}]}
+        self.assertEqual([a['text'] for a in remove_expired_actions(result,now)['actions']],['Meeting','Exam','Ask'])
+
 if __name__=='__main__':unittest.main()
