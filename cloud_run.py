@@ -188,8 +188,8 @@ def source_overview(day,rows,reason):
 def prepare_report(day,rows,folder=None):
     try:
         result=analyze(day,rows)
-        from offline_report import remove_expired_actions
-        result=remove_expired_actions(result,dt.datetime.now(LOCAL))
+        from offline_report import remove_expired_actions,effective_delivery
+        result=remove_expired_actions(result,effective_delivery(day,dt.datetime.now(LOCAL)))
         result['analysis_mode']='ai'
         return result
     except Exception as exc:

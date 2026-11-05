@@ -128,4 +128,14 @@ class OfflineTests(unittest.TestCase):
         fixed=ground_explicit_times(result,sources,set(sources))
         self.assertNotIn('18:00',fixed['actions'][0]['when'])
 
+    def test_deadline_guard_accounts_for_wait_until_ten_not_only_generation_time(self):
+        import datetime
+        from offline_report import effective_delivery,remove_expired_actions
+        from report_analysis import LOCAL
+        generated=datetime.datetime(2026,11,5,9,30,tzinfo=LOCAL)
+        effective=effective_delivery(datetime.date(2026,11,4),generated)
+        self.assertEqual(effective.hour,10)
+        data={'actions':[{'when':'5 ноября в 09:45'},{'when':'5 ноября в 11:00'}]}
+        self.assertEqual([a['when'] for a in remove_expired_actions(data,effective)['actions']],['5 ноября в 11:00'])
+
 if __name__=='__main__':unittest.main()
