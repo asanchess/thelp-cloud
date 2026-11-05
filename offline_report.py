@@ -149,6 +149,7 @@ def finalize(day,rows,parts,model):
     result=model.infer(review_prompt,schema,max_tokens=3500)
     if any(not item.get('evidence') or not set(item['evidence'])<=allowed for item in result['highlights']+result['actions']):raise CloudError('Unreferenced finding')
     result=remove_expired_actions(result,dt.datetime.now(LOCAL))
+    result=ground_explicit_times(result,by_key,allowed)
     chat_summaries=[{'chat_id':cid,'summary':' '.join(dict.fromkeys(texts))} for cid,texts in descriptions.items()]
     # Cross-part citations are checked against the complete sanitized original day.
     checked_sources,chats=verify_content(dict(result,chat_summaries=chat_summaries,sources=sources),rows)
@@ -182,6 +183,24 @@ def remove_expired_actions(result,now):
         when=deadline(item.get('when',''))
         if when is None or when>=now:kept.append(item)
     return dict(result,actions=kept)
+
+def ground_explicit_times(result,sources,allowed):
+    """Add the actual same-chat time message, or mark unsupported exact time."""
+    output=copy.deepcopy(result)
+    for item in output['highlights']+output['actions']:
+        times=re.findall(r'(?<!\d)\d{1,2}:\d{2}(?!\d)',item.get('when',''))
+        if not times:continue
+        chat_ids={sources[key]['chat_id'] for key in item['evidence']}
+        dates=re.findall(r'\b\d{1,2}\s+(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\b',item.get('when','').lower())
+        supported=[]
+        for key in sorted(allowed):
+            source=sources[key];text=source['quote'].lower()
+            if source['chat_id'] in chat_ids and all(value in text for value in times) and all(value in text for value in dates):supported.append(key)
+        if supported:
+            item['evidence']=list(dict.fromkeys(item['evidence']+[supported[0]]))
+        else:
+            item['when']='Точное время не подтверждено текстом источника; требуется сверка'
+    return output
 
 def analyze_offline(day,raw_rows,folder,model=None,max_chars=24000):
     from cloud_run import analyze

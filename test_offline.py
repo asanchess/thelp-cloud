@@ -117,4 +117,15 @@ class OfflineTests(unittest.TestCase):
         result={'actions':[{'text':'Register','when':'4 ноября в 17:00'}, {'text':'Meeting','when':'5 ноября в 18:00'}, {'text':'Exam','when':'06.11.2026, 11:00'}, {'text':'Past ISO','when':'2026-11-04 17:00'}, {'text':'Ask','when':'Срок не указан'}]}
         self.assertEqual([a['text'] for a in remove_expired_actions(result,now)['actions']],['Meeting','Exam','Ask'])
 
+    def test_timing_points_to_actual_same_chat_message_not_neighbor_proposal(self):
+        from offline_report import ground_explicit_times
+        sources={'m1':{'chat_id':10,'quote':'Предлагаю фронтенд'},'m2':{'chat_id':10,'quote':'Обсудим 5 ноября в 18:00'},'m3':{'chat_id':20,'quote':'Встреча 5 ноября в 18:00'}}
+        result={'highlights':[],'actions':[{'when':'5 ноября в 18:00','evidence':['m1']}]}
+        fixed=ground_explicit_times(result,sources,set(sources))
+        self.assertEqual(fixed['actions'][0]['evidence'],['m1','m2'])
+        self.assertEqual(result['actions'][0]['evidence'],['m1'])
+        sources['m2']['quote']='Дату уточним'
+        fixed=ground_explicit_times(result,sources,set(sources))
+        self.assertNotIn('18:00',fixed['actions'][0]['when'])
+
 if __name__=='__main__':unittest.main()
