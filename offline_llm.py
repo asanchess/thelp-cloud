@@ -8,6 +8,8 @@ import subprocess
 import tarfile
 import time
 import urllib.request
+import shutil
+from pathlib import PurePosixPath
 
 MODEL_REV='bc640142c66e1fdd12af0bd68f40445458f3869b'
 MODEL_NAME='Qwen3-4B-Q4_K_M.gguf'
@@ -31,11 +33,25 @@ def download(url,path,expected):
 def unpack(archive,target):
     target=Path(target).resolve();target.mkdir(parents=True,exist_ok=True)
     with tarfile.open(archive) as tar:
-        for member in tar.getmembers():
+        members=tar.getmembers()
+        if len(members)>500 or sum(m.size for m in members)>512*1024*1024:raise OfflineError('Archive size limit exceeded')
+        by={m.name:m for m in members}
+        for member in members:
             destination=(target/member.name).resolve()
-            if not destination.is_relative_to(target) or not (member.isfile() or member.isdir()):
+            if not destination.is_relative_to(target) or not (member.isfile() or member.isdir() or member.issym()):
                 raise OfflineError('Unsafe archive member')
-        tar.extractall(target,filter='data')
+            source=member;seen=set()
+            while source.issym():
+                if source.name in seen:raise OfflineError('Archive link cycle')
+                seen.add(source.name)
+                name=str(PurePosixPath(source.name).parent/source.linkname)
+                if not (target/name).resolve().is_relative_to(target) or name not in by:raise OfflineError('Unsafe archive link')
+                source=by[name]
+            if member.isdir():destination.mkdir(parents=True,exist_ok=True);continue
+            if not source.isfile():raise OfflineError('Archive link target is not a file')
+            destination.parent.mkdir(parents=True,exist_ok=True)
+            with tar.extractfile(source) as stream,destination.open('wb') as out:shutil.copyfileobj(stream,out)
+            destination.chmod(source.mode&0o755)
 
 class LocalModel:
     def __init__(self,folder,context=16384):
