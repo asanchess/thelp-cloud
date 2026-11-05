@@ -138,4 +138,14 @@ class OfflineTests(unittest.TestCase):
         data={'actions':[{'when':'5 ноября в 09:45'},{'when':'5 ноября в 11:00'}]}
         self.assertEqual([a['when'] for a in remove_expired_actions(data,effective)['actions']],['5 ноября в 11:00'])
 
+    def test_expired_imperative_highlight_moves_to_retrospective_section(self):
+        import datetime
+        from offline_report import remove_expired_actions
+        from report_analysis import LOCAL
+        result={'highlights':[{'title':'Registration','summary':'Нужно зарегистрироваться в срок','when':'4 ноября в 17:00','where':'Online','evidence':['m4']}],'actions':[],'sections':[]}
+        fixed=remove_expired_actions(result,datetime.datetime(2026,11,5,10,tzinfo=LOCAL))
+        self.assertEqual(fixed['highlights'],[])
+        self.assertIn('уже прошло',fixed['sections'][0]['body'])
+        self.assertIn('[m4]',fixed['sections'][0]['body'])
+
 if __name__=='__main__':unittest.main()

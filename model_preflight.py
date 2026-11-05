@@ -29,6 +29,7 @@ def main():
                 if '5 ноября' in item.get('when','') and '18' in item['when']:
                     assert 'm2' in item['evidence'],'Meeting time must cite its actual message'
             assert all('4 ноября' not in item.get('when','') for item in result['actions']),'Expired registration must not be an actionable deadline'
+            assert all('4 ноября' not in item.get('when','') for item in result['highlights']),'Expired imperative must not remain in current highlights'
             return
         samples=[];infer=batch_inference(model,rows,max_tokens=3500)
         def recorded(prompt):
