@@ -276,7 +276,10 @@ def deliver(state,day,data,full,pdf):
             continue
         entry['parts'][key]={'status':'sending'};state.save()
         result=bot.send_summary(data) if path is None else bot.send_file(path,caption)
-        entry['parts'][key]={'status':'sent','message_id':result['message_id']};state.save()
+        receipt={'status':'sent','message_id':result['message_id']}
+        if path is not None and result.get('document'):
+            receipt['document']={name:result['document'][name] for name in ('file_id','file_name','file_size') if name in result['document']}
+        entry['parts'][key]=receipt;state.save()
 
 
 def main():

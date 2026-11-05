@@ -38,11 +38,13 @@ class CloudTests(unittest.TestCase):
         state=MemoryState()
         with patch('cloud_run.Bot') as bot:
             bot.return_value.send_summary.return_value={'message_id':10}
-            bot.return_value.send_file.side_effect=[{'message_id':11},{'message_id':12}]
+            bot.return_value.send_file.side_effect=[{'message_id':11,'document':{'file_id':'synthetic-file','file_name':'report.pdf','file_size':100,'caption':'Never store message text'}},{'message_id':12}]
             cloud_run.deliver(state,datetime.date(2026,11,4),{'analysis_mode':'local-ai'},'html','pdf')
         entry=state.data['days']['2026-11-04']
         self.assertEqual(entry['source_parts']['summary']['message_id'],1)
         self.assertEqual(entry['parts']['summary']['message_id'],10)
+        self.assertEqual(entry['parts']['pdf']['document']['file_id'],'synthetic-file')
+        self.assertNotIn('caption',entry['parts']['pdf']['document'])
         self.assertEqual(state.saves[0]['days']['2026-11-04']['mode'],'ai_pending')
 
     def test_long_summary_stays_bounded_and_escaped_before_delivery(self):

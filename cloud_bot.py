@@ -9,7 +9,7 @@ class Bot:
         self._token = token or os.environ['TELEGRAM_BOT_TOKEN']
 
     def call(self, method, fields=None, document=None):
-        if method not in {'getMe','getChat','getWebhookInfo','sendMessage','sendDocument','editMessageMedia'}:
+        if method not in {'getMe','getChat','getFile','getWebhookInfo','sendMessage','sendDocument','editMessageMedia'}:
             raise DeliveryError('Unsupported bot operation')
         fields = dict(fields or {})
         if method in {'getChat','sendMessage','sendDocument','editMessageMedia'}:
