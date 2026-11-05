@@ -28,4 +28,15 @@ class OfflineTests(unittest.TestCase):
         model.request=lambda *args,**kwargs:self.fail('No generation request allowed')
         with self.assertRaises(OfflineError):model.infer('test',{},max_tokens=30)
 
+    def test_schema_uses_engine_supported_nested_wrapper(self):
+        model=LocalModel(Path('.'),context=4096);model.tokens=lambda text:5
+        captured=[]
+        def request(path,body):
+            captured.append(body)
+            return {'choices':[{'finish_reason':'stop','message':{'content':'{"answer":"yes"}'}}]}
+        model.request=request
+        schema={'type':'object','properties':{'answer':{'type':'string'}},'required':['answer']}
+        self.assertEqual(model.infer('test',schema,max_tokens=30),{'answer':'yes'})
+        self.assertEqual(captured[0]['response_format']['json_schema']['schema'],schema)
+
 if __name__=='__main__':unittest.main()
